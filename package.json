@@ -1,0 +1,121 @@
+{
+  "name": "agent-usage-tracker",
+  "displayName": "Agent Usage Tracker",
+  "description": "Track Claude Code and OpenAI Codex usage with rolling windows, session tracking, and context-bloat detection.",
+  "version": "0.1.0",
+  "publisher": "alex",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentTracker.openDashboard",
+        "title": "Agent Tracker: Open Dashboard"
+      },
+      {
+        "command": "agentTracker.newSession",
+        "title": "Agent Tracker: New Session"
+      },
+      {
+        "command": "agentTracker.resetSession",
+        "title": "Agent Tracker: Reset Current Session"
+      },
+      {
+        "command": "agentTracker.snoozeWarning",
+        "title": "Agent Tracker: Snooze Context Warning"
+      },
+      {
+        "command": "agentTracker.recordPrompt",
+        "title": "Agent Tracker: Record Prompt (Manual)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentTracker",
+          "title": "AI Usage",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentTracker": [
+        {
+          "id": "agentTracker.summary",
+          "name": "Summary"
+        },
+        {
+          "id": "agentTracker.recent",
+          "name": "Recent & Alerts"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agent Usage Tracker",
+      "properties": {
+        "agentTracker.max5h": {
+          "type": "number",
+          "default": 40,
+          "description": "Maximum prompts allowed in the rolling 5-hour window."
+        },
+        "agentTracker.max7d": {
+          "type": "number",
+          "default": 200,
+          "description": "Maximum prompts allowed in the rolling 7-day window."
+        },
+        "agentTracker.contextThresholds.busy": {
+          "type": "number",
+          "default": 50,
+          "description": "Context score at which a session is considered 'busy'."
+        },
+        "agentTracker.contextThresholds.heavy": {
+          "type": "number",
+          "default": 70,
+          "description": "Context score at which a session is considered 'heavy'."
+        },
+        "agentTracker.contextThresholds.bloated": {
+          "type": "number",
+          "default": 85,
+          "description": "Context score at which a session is considered 'bloated'."
+        },
+        "agentTracker.inactivityTimeoutMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "Minutes of inactivity before a new session is started."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:ext": "node esbuild.config.mjs",
+    "build:webview": "vite build --config vite.config.ts",
+    "build": "npm run build:ext && npm run build:webview",
+    "watch:ext": "node esbuild.config.mjs --watch",
+    "watch:webview": "vite build --watch --config vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc -p src/webview/frontend/tsconfig.json --noEmit",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}
