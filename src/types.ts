@@ -45,5 +45,6 @@ export interface SerializedState {
   events: UsageEvent[];
   sessions: Session[];
   activeSessionIds: Partial<Record<Agent, string>>;
+  snoozedSessionIds: string[];
   settings: Settings;
 }

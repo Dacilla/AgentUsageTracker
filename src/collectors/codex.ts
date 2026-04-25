@@ -5,6 +5,8 @@ import * as vscode from 'vscode';
 import { recordPrompt } from '../state/sessions';
 import type { Store } from '../state/store';
 import type { Collector } from './claude';
+import { createJsonlTreeWatcher } from './jsonlWatch';
+import { parseCodexJsonlLine } from './parsers';
 
 // Known marketplace extension IDs for OpenAI Codex.
 const CODEX_EXTENSION_IDS = [
@@ -33,8 +35,7 @@ function candidateCodexDirs(): string[] {
 }
 
 export function createCodexCollector(): Collector {
-  let watcher: fs.FSWatcher | undefined;
-  let subdirWatchers: fs.FSWatcher[] = [];
+  let fileWatcher: ReturnType<typeof createJsonlTreeWatcher> | undefined;
   let heuristicDisposable: vscode.Disposable | undefined;
   let lastHeuristicEvent = 0;
 
@@ -70,85 +71,18 @@ export function createCodexCollector(): Collector {
     return false;
   }
 
-  function readLastLine(filePath: string): string | null {
-    try {
-      const fd = fs.openSync(filePath, 'r');
-      const stat = fs.fstatSync(fd);
-      const size = stat.size;
-      if (size === 0) { fs.closeSync(fd); return null; }
-      const readSize = Math.min(512, size);
-      const buf = Buffer.alloc(readSize);
-      fs.readSync(fd, buf, 0, readSize, size - readSize);
-      fs.closeSync(fd);
-      const text = buf.toString('utf8');
-      const newlineIdx = text.lastIndexOf('\n', text.length - 2);
-      return newlineIdx === -1 ? text.trim() : text.slice(newlineIdx + 1).trim();
-    } catch {
-      return null;
-    }
-  }
-
-  function isUserPromptLine(line: string): boolean {
-    try {
-      const obj = JSON.parse(line) as Record<string, unknown>;
-      return obj['role'] === 'user' || obj['type'] === 'user';
-    } catch {
-      return false;
-    }
-  }
-
-  function watchDir(dirPath: string, store: Store, out: vscode.OutputChannel): fs.FSWatcher | null {
-    try {
-      return fs.watch(dirPath, { recursive: process.platform !== 'linux' }, (event, filename) => {
-        if (event !== 'change' || !filename || !filename.endsWith('.jsonl')) { return; }
-        const filePath = path.join(dirPath, filename);
-        const line = readLastLine(filePath);
-        if (line && isUserPromptLine(line)) {
-          out.appendLine(`Codex: prompt detected via file watch (${path.basename(filename)})`);
-          onPrompt(store, dirPath);
-        }
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  function watchSubdirs(codexDir: string, store: Store, out: vscode.OutputChannel): void {
-    try {
-      const entries = fs.readdirSync(codexDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const sub = path.join(codexDir, entry.name);
-          const w = watchDir(sub, store, out);
-          if (w) { subdirWatchers.push(w); }
-        }
-      }
-      fs.watch(codexDir, (event, filename) => {
-        if (event === 'rename' && filename) {
-          const sub = path.join(codexDir, filename);
-          try {
-            if (fs.statSync(sub).isDirectory()) {
-              const w = watchDir(sub, store, out);
-              if (w) { subdirWatchers.push(w); }
-            }
-          } catch { /* may not exist yet */ }
-        }
-      });
-    } catch { /* codexDir may be inaccessible */ }
-  }
-
   function tryFileWatch(store: Store, out: vscode.OutputChannel): boolean {
     for (const dir of candidateCodexDirs()) {
-      try {
-        fs.accessSync(dir);
-        out.appendLine(`Codex: watching ${dir}`);
-        if (process.platform === 'linux') {
-          watchSubdirs(dir, store, out);
-        } else {
-          watcher = watchDir(dir, store, out) ?? undefined;
-        }
+      fileWatcher = createJsonlTreeWatcher({
+        label: 'Codex',
+        rootDir: dir,
+        out,
+        parseLine: parseCodexJsonlLine,
+        onPrompt: workspace => onPrompt(store, workspace),
+      });
+      if (fileWatcher.start()) {
         return true;
-      } catch { /* try next candidate */ }
+      }
     }
     out.appendLine('Codex: no session directory found, skipping file watch tier');
     return false;
@@ -180,11 +114,9 @@ export function createCodexCollector(): Collector {
       startHeuristic(store, outChannel, context);
     },
     stop() {
-      watcher?.close();
-      for (const w of subdirWatchers) { w.close(); }
-      subdirWatchers = [];
+      fileWatcher?.stop();
       heuristicDisposable?.dispose();
-      watcher = undefined;
+      fileWatcher = undefined;
     },
   };
 }

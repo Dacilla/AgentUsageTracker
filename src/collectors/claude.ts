@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { recordPrompt } from '../state/sessions';
 import type { Store } from '../state/store';
+import { createJsonlTreeWatcher } from './jsonlWatch';
+import { parseClaudeJsonlLine } from './parsers';
 
 // Known marketplace extension IDs for Claude Code.
 // We try each in order and use the first one found.
@@ -18,11 +20,9 @@ export interface Collector {
 }
 
 export function createClaudeCollector(): Collector {
-  let watcher: fs.FSWatcher | undefined;
-  let subdirWatchers: fs.FSWatcher[] = [];
+  let fileWatcher: ReturnType<typeof createJsonlTreeWatcher> | undefined;
   let heuristicDisposable: vscode.Disposable | undefined;
   let lastHeuristicEvent = 0;
-  let activeStore: Store | undefined;
 
   function onPrompt(store: Store, workspace: string) {
     recordPrompt('claude', store, workspace);
@@ -57,92 +57,20 @@ export function createClaudeCollector(): Collector {
     return false;
   }
 
-  function readLastLine(filePath: string): string | null {
-    try {
-      const fd = fs.openSync(filePath, 'r');
-      const stat = fs.fstatSync(fd);
-      const size = stat.size;
-      if (size === 0) { fs.closeSync(fd); return null; }
-      const readSize = Math.min(512, size);
-      const buf = Buffer.alloc(readSize);
-      fs.readSync(fd, buf, 0, readSize, size - readSize);
-      fs.closeSync(fd);
-      const text = buf.toString('utf8');
-      const newlineIdx = text.lastIndexOf('\n', text.length - 2);
-      return newlineIdx === -1 ? text.trim() : text.slice(newlineIdx + 1).trim();
-    } catch {
-      return null;
-    }
-  }
-
-  function isUserPromptLine(line: string): boolean {
-    try {
-      const obj = JSON.parse(line) as Record<string, unknown>;
-      // Claude JSONL lines have a "type" field for conversation entries
-      return obj['role'] === 'user' || obj['type'] === 'user';
-    } catch {
-      return false;
-    }
-  }
-
-  function watchDir(dirPath: string, store: Store, out: vscode.OutputChannel): fs.FSWatcher | null {
-    try {
-      return fs.watch(dirPath, { recursive: process.platform !== 'linux' }, (event, filename) => {
-        if (event !== 'change' || !filename || !filename.endsWith('.jsonl')) { return; }
-        const filePath = path.join(dirPath, filename);
-        const line = readLastLine(filePath);
-        if (line && isUserPromptLine(line)) {
-          out.appendLine(`Claude: prompt detected via file watch (${path.basename(filename)})`);
-          onPrompt(store, dirPath);
-        }
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  function watchSubdirs(claudeDir: string, store: Store, out: vscode.OutputChannel): void {
-    try {
-      const entries = fs.readdirSync(claudeDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const sub = path.join(claudeDir, entry.name);
-          const w = watchDir(sub, store, out);
-          if (w) { subdirWatchers.push(w); }
-        }
-      }
-      // Also watch the parent for new subdirectories appearing
-      fs.watch(claudeDir, (event, filename) => {
-        if (event === 'rename' && filename) {
-          const sub = path.join(claudeDir, filename);
-          try {
-            if (fs.statSync(sub).isDirectory()) {
-              const w = watchDir(sub, store, out);
-              if (w) { subdirWatchers.push(w); }
-            }
-          } catch { /* directory may not exist yet */ }
-        }
-      });
-    } catch { /* claudeDir may be inaccessible */ }
-  }
-
   function tryFileWatch(store: Store, out: vscode.OutputChannel): boolean {
     const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-    try {
-      fs.accessSync(claudeDir);
-    } catch {
-      out.appendLine(`Claude: ~/.claude/projects not found, skipping file watch tier`);
-      return false;
+    fileWatcher = createJsonlTreeWatcher({
+      label: 'Claude',
+      rootDir: claudeDir,
+      out,
+      parseLine: parseClaudeJsonlLine,
+      onPrompt: workspace => onPrompt(store, workspace),
+    });
+    const started = fileWatcher.start();
+    if (!started) {
+      out.appendLine('Claude: ~/.claude/projects not found, skipping file watch tier');
     }
-
-    out.appendLine(`Claude: watching ${claudeDir}`);
-
-    if (process.platform === 'linux') {
-      watchSubdirs(claudeDir, store, out);
-    } else {
-      watcher = watchDir(claudeDir, store, out) ?? undefined;
-    }
-    return true;
+    return started;
   }
 
   function startHeuristic(store: Store, out: vscode.OutputChannel, context: vscode.ExtensionContext): void {
@@ -166,18 +94,14 @@ export function createClaudeCollector(): Collector {
 
   return {
     start(store, outChannel, context) {
-      activeStore = store;
       if (tryExtensionApi(store, outChannel)) { return; }
       if (tryFileWatch(store, outChannel)) { return; }
       startHeuristic(store, outChannel, context);
     },
     stop() {
-      watcher?.close();
-      for (const w of subdirWatchers) { w.close(); }
-      subdirWatchers = [];
+      fileWatcher?.stop();
       heuristicDisposable?.dispose();
-      watcher = undefined;
-      activeStore = undefined;
+      fileWatcher = undefined;
     },
   };
 }

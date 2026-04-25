@@ -67,6 +67,9 @@ export class RecentProvider implements vscode.TreeDataProvider<RecentItem> {
     }
 
     for (const session of this.store.getAllSessions()) {
+      if (this.store.isSessionSnoozed(session.id)) {
+        continue;
+      }
       if (session.contextState === 'bloated') {
         alerts.push({ label: `${session.agent} session bloated`, description: `score ${session.contextScore}`, iconId: 'error' });
       } else if (session.contextState === 'heavy') {

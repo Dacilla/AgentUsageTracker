@@ -101,6 +101,7 @@
     "build": "npm run build:ext && npm run build:webview",
     "watch:ext": "node esbuild.config.mjs --watch",
     "watch:webview": "vite build --watch --config vite.config.ts",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/tests/parsers.test.js .test-dist/tests/jsonlWatch.test.js .test-dist/tests/sessions.test.js .test-dist/tests/store.test.js",
     "typecheck": "tsc --noEmit && tsc -p src/webview/frontend/tsconfig.json --noEmit",
     "vscode:prepublish": "npm run build"
   },

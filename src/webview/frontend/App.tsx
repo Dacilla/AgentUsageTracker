@@ -33,9 +33,20 @@ function getActiveSession(state: SerializedState, agent: 'claude' | 'codex'): Se
   return state.sessions.find(s => s.id === id);
 }
 
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) { return 'just now'; }
+  if (min < 60) { return `${min}m ago`; }
+  const hr = Math.floor(min / 60);
+  if (hr < 24) { return `${hr}h ago`; }
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
 export function App() {
   const [state, setState] = useState<SerializedState>(window.__initialState__);
   const [agentFilter, setAgentFilter] = useState<'all' | 'claude' | 'codex'>('all');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | undefined>();
 
   useEffect(() => {
     const handler = (e: MessageEvent<{ type: string; payload: SerializedState }>) => {
@@ -54,14 +65,50 @@ export function App() {
 
   const claudeSession = getActiveSession(state, 'claude');
   const codexSession = getActiveSession(state, 'codex');
+  const filteredSessions = [...state.sessions]
+    .filter(session => agentFilter === 'all' || session.agent === agentFilter)
+    .sort((a, b) => b.lastActivity - a.lastActivity);
+  const defaultSessionId =
+    (agentFilter === 'claude' ? claudeSession?.id : undefined) ??
+    (agentFilter === 'codex' ? codexSession?.id : undefined) ??
+    claudeSession?.id ??
+    codexSession?.id ??
+    filteredSessions[0]?.id;
+  const selectedSession = filteredSessions.find(session => session.id === selectedSessionId)
+    ?? filteredSessions.find(session => session.id === defaultSessionId)
+    ?? filteredSessions[0];
+  const selectedSessionIsActive = selectedSession
+    ? state.activeSessionIds[selectedSession.agent] === selectedSession.id
+    : false;
+  const selectedSessionIsSnoozed = selectedSession
+    ? state.snoozedSessionIds.includes(selectedSession.id)
+    : false;
+  const selectedSessionCanSnooze = selectedSession?.contextState === 'heavy' || selectedSession?.contextState === 'bloated';
 
   const recentEvents = [...state.events]
     .reverse()
     .slice(0, 30)
     .filter(e => agentFilter === 'all' || e.agent === agentFilter);
 
+  useEffect(() => {
+    if (!selectedSession) {
+      if (selectedSessionId !== undefined) {
+        setSelectedSessionId(undefined);
+      }
+      return;
+    }
+
+    if (selectedSession.id !== selectedSessionId) {
+      setSelectedSessionId(selectedSession.id);
+    }
+  }, [selectedSession, selectedSessionId]);
+
   function handleReset(agent: 'claude' | 'codex') {
     vscode.postMessage({ type: 'resetSession', agent });
+  }
+
+  function handleSnooze(sessionId: string) {
+    vscode.postMessage({ type: 'snoozeWarning', sessionId });
   }
 
   return (
@@ -138,6 +185,81 @@ export function App() {
       <div>
         <div className="section-title">Recent Activity</div>
         <EventList events={recentEvents} />
+      </div>
+
+      <div>
+        <div className="section-title">Session Inspector</div>
+        {filteredSessions.length > 0 ? (
+          <div className="session-inspector">
+            <div className="session-selector">
+              {filteredSessions.slice(0, 8).map(session => {
+                const isActive = state.activeSessionIds[session.agent] === session.id;
+                const isSelected = selectedSession?.id === session.id;
+                const isSnoozed = state.snoozedSessionIds.includes(session.id);
+                return (
+                  <button
+                    key={session.id}
+                    className={`session-chip${isSelected ? ' selected' : ''}`}
+                    onClick={() => setSelectedSessionId(session.id)}
+                  >
+                    <span>{session.agent === 'claude' ? 'Claude' : 'Codex'}</span>
+                    <span>{session.contextState}</span>
+                    <span>{relativeTime(session.lastActivity)}</span>
+                    {isActive && <span>active</span>}
+                    {isSnoozed && <span>snoozed</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedSession && (
+              <div className="card session-detail-card">
+                <div className="session-detail-header">
+                  <div>
+                    <div className="card-title">Selected Session</div>
+                    <div className="session-detail-title">
+                      {selectedSession.agent === 'claude' ? 'Claude' : 'Codex'}
+                      {selectedSessionIsActive && <span className="state-badge state-healthy">Active</span>}
+                      {selectedSessionIsSnoozed && <span className="state-badge state-busy">Snoozed</span>}
+                    </div>
+                  </div>
+                  <div className="session-actions">
+                    {selectedSessionIsActive && (
+                      <button className="action-btn secondary" onClick={() => handleReset(selectedSession.agent)}>
+                        Reset Session
+                      </button>
+                    )}
+                    {selectedSessionCanSnooze && (
+                      <button className="action-btn" onClick={() => handleSnooze(selectedSession.id)}>
+                        {selectedSessionIsSnoozed ? 'Restore Warning' : 'Snooze Warning'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="session-metrics">
+                  <div><span>Workspace</span><strong>{selectedSession.workspace || 'Unknown workspace'}</strong></div>
+                  <div><span>Started</span><strong>{relativeTime(selectedSession.startTime)}</strong></div>
+                  <div><span>Last activity</span><strong>{relativeTime(selectedSession.lastActivity)}</strong></div>
+                  <div><span>Prompts</span><strong>{selectedSession.promptCount}</strong></div>
+                  <div><span>Turns</span><strong>{selectedSession.turns}</strong></div>
+                  <div><span>Files touched</span><strong>{selectedSession.filesTouched}</strong></div>
+                  <div><span>Retries</span><strong>{selectedSession.retries}</strong></div>
+                  <div><span>Large inputs</span><strong>{selectedSession.largeInputs}</strong></div>
+                </div>
+
+                <div className="session-context-row">
+                  <UsageBar label="Context score" value={selectedSession.contextScore} max={100} />
+                  <span className={`state-badge state-${selectedSession.contextState}`}>
+                    {selectedSession.contextState}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="empty-note">No sessions available for this filter.</div>
+        )}
       </div>
     </div>
   );

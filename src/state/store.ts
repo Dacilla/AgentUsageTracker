@@ -9,9 +9,18 @@ export class Store {
   private events: UsageEvent[] = [];
   private sessions: Map<string, Session> = new Map();
   private activeSessionIds: Partial<Record<Agent, string>> = {};
+  private snoozedSessionIds = new Set<string>();
   private listeners: Array<() => void> = [];
+  private _settings: Settings = { ...DEFAULT_SETTINGS };
 
-  settings: Settings = { ...DEFAULT_SETTINGS };
+  get settings(): Settings {
+    return this._settings;
+  }
+
+  set settings(value: Settings) {
+    this._settings = value;
+    this.notify();
+  }
 
   onDidChange(listener: () => void): () => void {
     this.listeners.push(listener);
@@ -57,16 +66,37 @@ export class Store {
     return id ? this.sessions.get(id) : undefined;
   }
 
-  setActiveSession(agent: Agent, sessionId: string | undefined): void {
+  setActiveSession(agent: Agent, sessionId: string | undefined, notify = true): void {
+    const current = this.activeSessionIds[agent];
+    if (current === sessionId) {
+      return;
+    }
     if (sessionId === undefined) {
       delete this.activeSessionIds[agent];
     } else {
       this.activeSessionIds[agent] = sessionId;
     }
+    if (notify) {
+      this.notify();
+    }
   }
 
   getAllSessions(): Session[] {
     return [...this.sessions.values()];
+  }
+
+  isSessionSnoozed(sessionId: string): boolean {
+    return this.snoozedSessionIds.has(sessionId);
+  }
+
+  toggleSessionSnooze(sessionId: string): boolean {
+    if (this.snoozedSessionIds.has(sessionId)) {
+      this.snoozedSessionIds.delete(sessionId);
+    } else {
+      this.snoozedSessionIds.add(sessionId);
+    }
+    this.notify();
+    return this.snoozedSessionIds.has(sessionId);
   }
 
   getRecentEvents(count: number): UsageEvent[] {
@@ -78,6 +108,7 @@ export class Store {
       events: this.events,
       sessions: [...this.sessions.values()],
       activeSessionIds: this.activeSessionIds,
+      snoozedSessionIds: [...this.snoozedSessionIds],
       settings: this.settings,
     } satisfies SerializedState);
   }
@@ -94,8 +125,9 @@ export class Store {
         (data.sessions ?? []).map(s => [s.id, s])
       );
       this.activeSessionIds = data.activeSessionIds ?? {};
+      this.snoozedSessionIds = new Set(data.snoozedSessionIds ?? []);
       if (data.settings) {
-        this.settings = { ...DEFAULT_SETTINGS, ...data.settings };
+        this._settings = { ...DEFAULT_SETTINGS, ...data.settings };
       }
     } catch {
       // corrupted state — start fresh

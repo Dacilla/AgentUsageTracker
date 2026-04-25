@@ -39,8 +39,8 @@ export function startSession(agent: Agent, workspace: string, store: Store): Ses
     contextState: 'healthy',
     workspace,
   };
+  store.setActiveSession(agent, session.id, false);
   store.upsertSession(session);
-  store.setActiveSession(agent, session.id);
   return session;
 }
 
@@ -78,12 +78,17 @@ export function maybeExpireSession(agent: Agent, store: Store): void {
   if (!session) { return; }
   const timeoutMs = store.settings.inactivityTimeoutMinutes * 60 * 1000;
   if (Date.now() - session.lastActivity > timeoutMs) {
-    store.setActiveSession(agent, undefined);
+    store.setActiveSession(agent, undefined, false);
   }
 }
 
-export function resetSession(agent: Agent, store: Store): void {
-  store.setActiveSession(agent, undefined);
+export function resetSession(agent: Agent, store: Store, notify = true): void {
+  store.setActiveSession(agent, undefined, notify);
+}
+
+export function startFreshSession(agent: Agent, workspace: string, store: Store): Session {
+  resetSession(agent, store, false);
+  return startSession(agent, workspace, store);
 }
 
 export function incrementFilesTouched(agent: Agent, store: Store): void {
